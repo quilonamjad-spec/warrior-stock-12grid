@@ -14,14 +14,13 @@ st.markdown("""
     <style>
     .block-container { padding-top: 1.5rem; padding-bottom: 0rem; }
     
-    /* Beautiful unified container matching TradingView dark theme */
-    div[data-testid="stColumn"] {
+    /* Target ONLY top-level grid cards cleanly using custom container wrapper */
+    .grid-card-wrapper {
         border: 1px solid #2d3139;
         padding: 14px;
         border-radius: 8px;
         background-color: #131722;
         margin-bottom: 12px;
-        min-height: 260px;
     }
     
     /* Style for the inline grid text input boxes to make them look slick */
@@ -45,6 +44,32 @@ st.markdown("""
         margin: 0 !important;
         font-size: 20px !important;
         font-weight: bold !important;
+        color: #ffffff;
+    }
+    
+    /* Clean custom CSS for side-by-side metrics to bypass Streamlit column bugs */
+    .metrics-row {
+        display: flex;
+        justify-content: space-between;
+        background: #1c2030;
+        padding: 8px;
+        border-radius: 6px;
+        border: 1px solid #2d3139;
+        margin-bottom: 10px;
+    }
+    .metric-box {
+        text-align: center;
+        width: 48%;
+    }
+    .metric-label {
+        font-size: 11px;
+        color: #848e9c;
+        margin-bottom: 2px;
+        text-transform: uppercase;
+    }
+    .metric-value {
+        font-size: 18px;
+        font-weight: bold;
         color: #ffffff;
     }
     </style>
@@ -128,11 +153,9 @@ max_ema_extension = st.sidebar.slider("Max Allowed 9 EMA Extension (%):", 0.5, 3
 # =====================================================================
 suffix = ".NS" if exchange == "NSE (.NS)" else ".BO"
 
-# Callback to clean out an assigned slot securely
 def reset_grid_slot_callback(slot_key):
     st.session_state[slot_key] = ""
 
-# Seed initial layout values safely inside the boundaries
 for i in range(1, 13):
     state_key = f"grid_slot_{i}"
     if state_key not in st.session_state:
@@ -142,7 +165,6 @@ for i in range(1, 13):
         elif i == 4: st.session_state[state_key] = "LICI"
         else: st.session_state[state_key] = ""
 
-# Map out what active targets exist within the exact 12 slots
 active_batch_list = []
 slot_to_ticker_map = {}
 
@@ -153,28 +175,29 @@ for i in range(1, 13):
         active_batch_list.append(full_ticker)
         slot_to_ticker_map[i] = full_ticker
 
-# Single parallel data batch download
 global_batch_df = pull_batch_clean_feed(list(set(active_batch_list)), trading_tf, period="1mo") if active_batch_list else None
 
 # =====================================================================
-# 6. UNIFIED 4x3 INTERACTIVE MATRIX GENERATOR
+# 6. UNIFIED 4x3 INTERACTIVE MATRIX GENERATOR WITH CANDLESTICK CHARTS
 # =====================================================================
-for r in range(3):  # 3 Rows * 4 Columns = 12 Matrix Slots perfectly balanced
+for r in range(3):  
     grid_cols = st.columns(4)
     for c in range(4):
         slot_idx = r * 4 + c + 1
         slot_key = f"grid_slot_{slot_idx}"
         
-        # Absolute hard stop guarantee to prevent any accidental lookups beyond slot 12
         if slot_idx > 12:
             break
             
         with grid_cols[c]:
+            # Injecting explicit layout wrapper div inside the column to contain styling cleanly
+            st.markdown('<div class="grid-card-wrapper">', unsafe_allow_html=True)
+            
             # --- RENDER BLOCK: EMPTY STATE INPUT ---
             if not st.session_state.get(slot_key, ""):
                 st.markdown(f"<p style='color:#5c6370; font-size:11px; margin-bottom:2px; font-weight:bold;'>📟 SLOT {slot_idx} READY</p>", unsafe_allow_html=True)
                 st.text_input("Deploy Asset Symbol:", key=slot_key, label_visibility="collapsed", placeholder="Type ticker... (e.g. TCS)")
-                st.markdown("<div style='height:165px; display:flex; align-items:center; justify-content:center;'><span style='color:#2d3139; font-size:24px;'>＋</span></div>", unsafe_allow_html=True)
+                st.markdown("<div style='height:330px; display:flex; align-items:center; justify-content:center;'><span style='color:#2d3139; font-size:24px;'>＋</span></div>", unsafe_allow_html=True)
             
             # --- RENDER BLOCK: ACTIVE POSITION TRACKING CARD ---
             else:
@@ -188,9 +211,9 @@ for r in range(3):  # 3 Rows * 4 Columns = 12 Matrix Slots perfectly balanced
                         if st.button("❌ Remove", key=f"err_rm_{slot_idx}", use_container_width=True):
                             st.session_state[slot_key] = ""
                             st.rerun()
+                        st.markdown('</div>', unsafe_allow_html=True)
                         continue
                     
-                    # Unpack ticker historical array data structures safely
                     if len(set(active_batch_list)) > 1:
                         df_ticker_raw = global_batch_df[ticker_symbol].copy()
                     else:
@@ -200,6 +223,7 @@ for r in range(3):  # 3 Rows * 4 Columns = 12 Matrix Slots perfectly balanced
                     if trade_df.empty or len(trade_df) < 25:
                         st.markdown(f"### **{clean_display_name}**")
                         st.caption("⏳ Loading time history...")
+                        st.markdown('</div>', unsafe_allow_html=True)
                         continue
                     
                     # --- MATH STACK CORE FORMULAS ---
@@ -228,17 +252,14 @@ for r in range(3):  # 3 Rows * 4 Columns = 12 Matrix Slots perfectly balanced
                     live_ema9 = live_candle['EMA_9']
                     prev_1 = working_df.iloc[-2] if len(working_df) >= 2 else live_candle
                     
-                    # Volatility Metrics
                     vol_mean = history['Volume'].mean() if not history.empty else 1
                     vol_std = history['Volume'].std() if not history.empty else 1
                     volume_z_score = (live_candle['Volume'] - vol_mean) / vol_std if vol_std > 0 else 0
                     volume_shock_confirmed = volume_z_score >= vol_sigma
                     
-                    # Trend Direction Indicators
                     higher_tf_is_bullish = C > trade_df['Close'].ewm(span=20, adjust=False).mean().iloc[-1]
                     ema_extension_pct = (C - live_ema9) / live_ema9 if live_ema9 > 0 else 0
                     
-                    # Candlestick Mechanics Signature Matching Engine
                     body = abs(C - O)
                     total_range = H - L if (H - L) > 0 else 0.01
                     upper_wick = H - max(O, C)
@@ -272,7 +293,6 @@ for r in range(3):  # 3 Rows * 4 Columns = 12 Matrix Slots perfectly balanced
                     in_resistance_zone = H >= (resistance_ceiling - buffer_amt)
                     in_support_zone = L <= (support_floor + buffer_amt)
                     
-                    # State Logic Matrix Engine
                     if C > resistance_ceiling:
                         if volume_shock_confirmed:
                             if ema_extension_pct > max_ema_extension: status_msg = "⚠️ OVEREXTENDED BREAKOUT"; theme_color = "#744210"
@@ -309,15 +329,13 @@ for r in range(3):  # 3 Rows * 4 Columns = 12 Matrix Slots perfectly balanced
                         status_msg = "⚪ NO-MAN'S LAND"; theme_color = "#1f232a"
                         analysis_narrative = f"Asset spinning tightly inside internal trading bands. Candle: {detected_pattern}."
                     
-                    # --- FIXED NO-GAP SINGLE-LINE HEADER LAYOUT ---
-                    # Using CSS Flex container to put title and button side by side flawlessly
+                    # --- HEADER CONTROLS ---
                     st.markdown(f"""
                         <div class="card-header-container">
                             <span class="card-header-title">{clean_display_name}</span>
                         </div>
                     """, unsafe_allow_html=True)
                     
-                    # The reset button sits cleanly below/adjacent with tight layout margins
                     st.button("❌ Remove Asset", key=f"clear_slot_{slot_idx}", on_click=reset_grid_slot_callback, args=(slot_key,), use_container_width=True)
                     
                     if detected_pattern != "None":
@@ -331,14 +349,58 @@ for r in range(3):  # 3 Rows * 4 Columns = 12 Matrix Slots perfectly balanced
                     </div>
                     """, unsafe_allow_html=True)
                     
-                    mc1, mc2 = st.columns(2)
-                    mc1.metric("Vol Z-Score", f"{volume_z_score:.1f} σ")
-                    mc2.metric("9 EMA Dist", f"{ema_extension_pct*100:.2f}%")
+                    # --- BUG FIX: CUSTOM CSS METRIC DISPLAY (PREVENTS INNER BOX STRETCH) ---
+                    st.markdown(f"""
+                    <div class="metrics-row">
+                        <div class="metric-box">
+                            <div class="metric-label">Vol Z-Score</div>
+                            <div class="metric-value">{volume_z_score:.1f} σ</div>
+                        </div>
+                        <div class="metric-box">
+                            <div class="metric-label">9 EMA Dist</div>
+                            <div class="metric-value">{ema_extension_pct*100:.2f}%</div>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
                     
-                    plot_df = working_df[working_df.index.date == live_candle.name.date()].copy() if boundary_mode == "Purely Today's Session Fixed Baseline" else working_df.tail(25)
-                        
+                    # --- INLINE CANDLESTICK CHART INJECTION ---
+                    plot_df = working_df[working_df.index.date == live_candle.name.date()].copy() if boundary_mode == "Purely Today's Session Fixed Baseline" else working_df.tail(20)
+                    
+                    grid_chart = go.Figure()
+                    
+                    # Add Candlesticks
+                    grid_chart.add_trace(go.Candlestick(
+                        x=plot_df.index,
+                        open=plot_df['Open'], high=plot_df['High'], low=plot_df['Low'], close=plot_df['Close'],
+                        name="Price", increasing_line_color='#26a69a', decreasing_line_color='#ef5350',
+                        increasing_fillcolor='#26a69a', decreasing_fillcolor='#ef5350'
+                    ))
+                    
+                    # Add 9 EMA Tracker Line
+                    grid_chart.add_trace(go.Scatter(
+                        x=plot_df.index, y=plot_df['EMA_9'],
+                        line=dict(color="#3a86ff", width=1.5),
+                        name="9 EMA", hoverinfo='none'
+                    ))
+                    
+                    # Styling for beautiful, clean inline view without messy text overlays
+                    grid_chart.update_layout(
+                        xaxis_rangeslider_visible=False,
+                        xaxis=dict(visible=False, showgrid=False),
+                        yaxis=dict(visible=False, showgrid=False),
+                        template="plotly_dark",
+                        height=160, # Fits precisely in the center block space
+                        margin=dict(l=5, r=5, t=5, b=5),
+                        showlegend=False
+                    )
+                    
+                    st.plotly_chart(grid_chart, use_container_width=True, key=f"inline_chart_{slot_idx}", config={'displayModeBar': False})
+                    
+                    # --- CORE ANALYSIS MODAL TRIGGER ---
                     if st.button(f"🔍 Open Workspace", key=f"workspace_btn_{slot_idx}", use_container_width=True):
                         open_expanded_workspace(clean_display_name, status_msg, theme_color, plot_df, resistance_ceiling, support_floor, analysis_narrative, detected_pattern)
                         
                 except Exception as loop_err:
                     st.caption(f"⚠️ Anomaly in Slot {slot_idx}")
+                    
+            st.markdown('</div>', unsafe_allow_html=True) # Close custom container wrapper safely
