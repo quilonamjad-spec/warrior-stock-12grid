@@ -149,27 +149,36 @@ proximity_buffer_pct = st.sidebar.slider("Zone Proximity Sensitivity (%):", 0.1,
 max_ema_extension = st.sidebar.slider("Max Allowed 9 EMA Extension (%):", 0.5, 3.0, 1.5, step=0.1) / 100
 
 # =====================================================================
-# 5. INITIALIZE STATE REGISTRY (STRICTLY HARD-BOUNDED TO 12 SLOTS)
+# 5. INITIALIZE STATE REGISTRY (FOOLPROOF ISOLATED PERSISTENCE ENGINE)
 # =====================================================================
 suffix = ".NS" if exchange == "NSE (.NS)" else ".BO"
 
-def reset_grid_slot_callback(slot_key):
-    st.session_state[slot_key] = ""
+# Master persistent storage key
+if "grid_master_tickers" not in st.session_state:
+    st.session_state["grid_master_tickers"] = {
+        1: "SUNPHARMA",
+        2: "RELIANCE",
+        3: "BEL",
+        4: "LICI",
+        5: "", 6: "", 7: "", 8: "", 9: "", 10: "", 11: "", 12: ""
+    }
 
-for i in range(1, 13):
-    state_key = f"grid_slot_{i}"
-    if state_key not in st.session_state:
-        if i == 1: st.session_state[state_key] = "SUNPHARMA"
-        elif i == 2: st.session_state[state_key] = "RELIANCE"
-        elif i == 3: st.session_state[state_key] = "BEL"
-        elif i == 4: st.session_state[state_key] = "LICI"
-        else: st.session_state[state_key] = ""
+# Callback handlers that directly target master storage and force structural reruns
+def add_asset_callback(idx):
+    input_key = f"temp_input_{idx}"
+    if input_key in st.session_state and st.session_state[input_key]:
+        st.session_state["grid_master_tickers"][idx] = st.session_state[input_key].strip().upper()
+        st.session_state[input_key] = "" # clean input widget memory trace
 
+def remove_asset_callback(idx):
+    st.session_state["grid_master_tickers"][idx] = ""
+
+# Map active list using master dictionary data structures
 active_batch_list = []
 slot_to_ticker_map = {}
 
 for i in range(1, 13):
-    raw_val = st.session_state.get(f"grid_slot_{i}", "").strip().upper()
+    raw_val = st.session_state["grid_master_tickers"][i]
     if raw_val:
         full_ticker = f"{raw_val}{suffix}"
         active_batch_list.append(full_ticker)
@@ -178,39 +187,42 @@ for i in range(1, 13):
 global_batch_df = pull_batch_clean_feed(list(set(active_batch_list)), trading_tf, period="1mo") if active_batch_list else None
 
 # =====================================================================
-# 6. UNIFIED 4x3 INTERACTIVE MATRIX GENERATOR WITH CANDLESTICK CHARTS
+# 6. UNIFIED 4x3 INTERACTIVE MATRIX GENERATOR
 # =====================================================================
 for r in range(3):  
     grid_cols = st.columns(4)
     for c in range(4):
         slot_idx = r * 4 + c + 1
-        slot_key = f"grid_slot_{slot_idx}"
         
         if slot_idx > 12:
             break
             
         with grid_cols[c]:
-            # Injecting explicit layout wrapper div inside the column to contain styling cleanly
             st.markdown('<div class="grid-card-wrapper">', unsafe_allow_html=True)
             
             # --- RENDER BLOCK: EMPTY STATE INPUT ---
-            if not st.session_state.get(slot_key, ""):
+            if not st.session_state["grid_master_tickers"][slot_idx]:
                 st.markdown(f"<p style='color:#5c6370; font-size:11px; margin-bottom:2px; font-weight:bold;'>📟 SLOT {slot_idx} READY</p>", unsafe_allow_html=True)
-                st.text_input("Deploy Asset Symbol:", key=slot_key, label_visibility="collapsed", placeholder="Type ticker... (e.g. TCS)")
+                st.text_input(
+                    "Deploy Asset Symbol:", 
+                    key=f"temp_input_{slot_idx}", 
+                    label_visibility="collapsed", 
+                    placeholder="Type ticker & hit Enter...",
+                    on_change=add_asset_callback,
+                    args=(slot_idx,)
+                )
                 st.markdown("<div style='height:330px; display:flex; align-items:center; justify-content:center;'><span style='color:#2d3139; font-size:24px;'>＋</span></div>", unsafe_allow_html=True)
             
             # --- RENDER BLOCK: ACTIVE POSITION TRACKING CARD ---
             else:
                 ticker_symbol = slot_to_ticker_map.get(slot_idx)
-                clean_display_name = ticker_symbol.replace('.NS', '').replace('.BO', '') if ticker_symbol else ""
+                clean_display_name = st.session_state["grid_master_tickers"][slot_idx]
                 
                 try:
                     if global_batch_df is None or ticker_symbol not in global_batch_df:
                         st.markdown(f"### **{clean_display_name}**")
                         st.caption("Synchronizing data stream...")
-                        if st.button("❌ Remove", key=f"err_rm_{slot_idx}", use_container_width=True):
-                            st.session_state[slot_key] = ""
-                            st.rerun()
+                        st.button("❌ Remove Asset", key=f"clear_slot_{slot_idx}", on_click=remove_asset_callback, args=(slot_idx,), use_container_width=True)
                         st.markdown('</div>', unsafe_allow_html=True)
                         continue
                     
@@ -223,6 +235,7 @@ for r in range(3):
                     if trade_df.empty or len(trade_df) < 25:
                         st.markdown(f"### **{clean_display_name}**")
                         st.caption("⏳ Loading time history...")
+                        st.button("❌ Remove Asset", key=f"clear_slot_{slot_idx}", on_click=remove_asset_callback, args=(slot_idx,), use_container_width=True)
                         st.markdown('</div>', unsafe_allow_html=True)
                         continue
                     
@@ -336,7 +349,7 @@ for r in range(3):
                         </div>
                     """, unsafe_allow_html=True)
                     
-                    st.button("❌ Remove Asset", key=f"clear_slot_{slot_idx}", on_click=reset_grid_slot_callback, args=(slot_key,), use_container_width=True)
+                    st.button("❌ Remove Asset", key=f"clear_slot_{slot_idx}", on_click=remove_asset_callback, args=(slot_idx,), use_container_width=True)
                     
                     if detected_pattern != "None":
                         st.markdown(f"<p style='text-align:center; margin-top:4px; margin-bottom:2px; font-size:12px; color:#3a86ff;'><b>Forming: {detected_pattern}</b></p>", unsafe_allow_html=True)
@@ -349,7 +362,7 @@ for r in range(3):
                     </div>
                     """, unsafe_allow_html=True)
                     
-                    # --- BUG FIX: CUSTOM CSS METRIC DISPLAY (PREVENTS INNER BOX STRETCH) ---
+                    # --- CUSTOM CSS METRIC DISPLAY ---
                     st.markdown(f"""
                     <div class="metrics-row">
                         <div class="metric-box">
@@ -367,33 +380,26 @@ for r in range(3):
                     plot_df = working_df[working_df.index.date == live_candle.name.date()].copy() if boundary_mode == "Purely Today's Session Fixed Baseline" else working_df.tail(20)
                     
                     grid_chart = go.Figure()
-                    
-                    # Add Candlesticks
                     grid_chart.add_trace(go.Candlestick(
                         x=plot_df.index,
                         open=plot_df['Open'], high=plot_df['High'], low=plot_df['Low'], close=plot_df['Close'],
                         name="Price", increasing_line_color='#26a69a', decreasing_line_color='#ef5350',
                         increasing_fillcolor='#26a69a', decreasing_fillcolor='#ef5350'
                     ))
-                    
-                    # Add 9 EMA Tracker Line
                     grid_chart.add_trace(go.Scatter(
                         x=plot_df.index, y=plot_df['EMA_9'],
                         line=dict(color="#3a86ff", width=1.5),
                         name="9 EMA", hoverinfo='none'
                     ))
-                    
-                    # Styling for beautiful, clean inline view without messy text overlays
                     grid_chart.update_layout(
                         xaxis_rangeslider_visible=False,
                         xaxis=dict(visible=False, showgrid=False),
                         yaxis=dict(visible=False, showgrid=False),
                         template="plotly_dark",
-                        height=160, # Fits precisely in the center block space
+                        height=160,
                         margin=dict(l=5, r=5, t=5, b=5),
                         showlegend=False
                     )
-                    
                     st.plotly_chart(grid_chart, use_container_width=True, key=f"inline_chart_{slot_idx}", config={'displayModeBar': False})
                     
                     # --- CORE ANALYSIS MODAL TRIGGER ---
@@ -403,4 +409,4 @@ for r in range(3):
                 except Exception as loop_err:
                     st.caption(f"⚠️ Anomaly in Slot {slot_idx}")
                     
-            st.markdown('</div>', unsafe_allow_html=True) # Close custom container wrapper safely
+            st.markdown('</div>', unsafe_allow_html=True)
